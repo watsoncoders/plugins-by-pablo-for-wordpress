@@ -1,0 +1,100 @@
+name: Build and validate plugin batch 01
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/**'
+      - '.github/workflows/build-batch-01.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  php-lint:
+    name: PHP lint ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.3', '8.4']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Lint all PHP files
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            php -l "$file"
+          done < <(find plugins -type f -name '*.php' -print0)
+
+      - name: Reject UTF-8 BOM in PHP files
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          bad = []
+          for p in Path("plugins").rglob("*.php"):
+              if p.read_bytes().startswith(b"\xef\xbb\xbf"):
+                  bad.append(str(p))
+          if bad:
+              raise SystemExit("UTF-8 BOM found in: " + ", ".join(bad))
+          print("No PHP files contain a UTF-8 BOM.")
+          PY
+
+  package:
+    name: Package installable ZIPs
+    runs-on: ubuntu-latest
+    needs: php-lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build plugin ZIP files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd plugins
+          for plugin in checkout-logic-pro cod-risk-guard margin-guard-for-woocommerce; do
+            test -f "$plugin/$plugin.php"
+            zip -rq "../dist/$plugin.zip" "$plugin"
+          done
+          cd ..
+          unzip -t dist/checkout-logic-pro.zip
+          unzip -t dist/cod-risk-guard.zip
+          unzip -t dist/margin-guard-for-woocommerce.zip
+          sha256sum dist/*.zip | tee dist/SHA256SUMS.txt
+
+      - name: Upload Checkout Logic Pro
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkout-logic-pro
+          path: dist/checkout-logic-pro.zip
+          if-no-files-found: error
+
+      - name: Upload COD Risk Guard
+        uses: actions/upload-artifact@v4
+        with:
+          name: cod-risk-guard
+          path: dist/cod-risk-guard.zip
+          if-no-files-found: error
+
+      - name: Upload Margin Guard for WooCommerce
+        uses: actions/upload-artifact@v4
+        with:
+          name: margin-guard-for-woocommerce
+          path: dist/margin-guard-for-woocommerce.zip
+          if-no-files-found: error
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: batch-01-checksums
+          path: dist/SHA256SUMS.txt
+          if-no-files-found: error
